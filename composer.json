@@ -14,7 +14,8 @@
         "bramus/router": "~1.4",
         "firebase/php-jwt": "^5.0",
         "symfony/filesystem": "^4.2",
-        "softcreatr/php-mime-detector": "^3.0"
+        "softcreatr/php-mime-detector": "^3.0",
+        "guzzlehttp/guzzle": "^6.3"
     },
     "autoload": {
         "psr-4": {

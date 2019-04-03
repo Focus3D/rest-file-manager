@@ -3,9 +3,9 @@ declare (strict_types = 1);
 
 namespace App;
 
-use App\Auth;
+use App\Auth\Auth;
+use App\Model\User;
 use App\Response;
-use App\User;
 use SoftCreatR\MimeDetector\MimeDetector;
 use SoftCreatR\MimeDetector\MimeDetectorException;
 use Symfony\Component\Filesystem\Exception\IOExceptionInterface;
@@ -27,22 +27,19 @@ class Main
     private $auth;
     private $filesystem;
 
-    private static $aclJSON;
-
     private static $current_dir_path;
     private static $uploadFolder;
     private static $tempFolder;
+    private static $allowed_types;
 
     public function __construct()
     {
 
-        $this::$aclJSON = __DIR__ . DIRECTORY_SEPARATOR . getenv('JSON_FILE');
-        $uploadsFolderName = getenv('UPLOADS_FOLDER');
-        $tempFolderName = getenv('TEMP_FOLDER');
+        $this::$allowed_types = explode(' ', getenv("ALLOWED_TYPES"));
 
         $this::$current_dir_path = getcwd();
-        $this::$uploadFolder = $this::$current_dir_path . DIRECTORY_SEPARATOR . $uploadsFolderName;
-        $this::$tempFolder = $this::$uploadFolder . DIRECTORY_SEPARATOR . $tempFolderName;
+        $this::$uploadFolder = $this::$current_dir_path . DIRECTORY_SEPARATOR . getenv('UPLOADS_FOLDER');
+        $this::$tempFolder = $this::$uploadFolder . DIRECTORY_SEPARATOR . getenv('TEMP_FOLDER');
 
         $this->filesystem = new Filesystem();
         $this->response = new Response();
@@ -64,24 +61,24 @@ class Main
      */
     public function showInfo(string $data)
     {
-        $this->checkUserAccess("read-file");
+        $this->checkUserAccess("read_file");
 
-        if (!isset($data)) {
+        $data = clean_input($data);
+
+        if (!validate_required($data)) {
             $this->finalResponse(415, "You need to provide the File or Folder path in the url!");
         }
 
-        $srcPathFirstCleaning = cleanInputPath($data);
+        if (!validate_alpha_dash_slash($data)) {
+            $this->finalResponse(415, "You need to provide valide Path of a folder or a file!");
+        }
 
-
-        if (hasPathEndsWithFile($srcPathFirstCleaning)) {
-            $srcPathLessFile = removeFilenameFromPath($srcPathFirstCleaning);
-            $srcPathOnly = filter_path($srcPathLessFile);
-            //$srcFilename = substr(strrchr($srcPathFirstCleaning, "/"), 1);
-            $srcFilename = basename($srcPathFirstCleaning);
-            $srcFilename = filter_filename($srcFilename);
-            $srcPathInput = $srcPathOnly . DIRECTORY_SEPARATOR . $srcFilename;
+        if (hasPathEndsWithFile($data)) {
+            $srcPathLessFile = removeFilenameFromPath($data);
+            $srcFilename = basename($data);
+            $srcPathInput = $srcPathLessFile . DIRECTORY_SEPARATOR . $srcFilename;
         } else {
-            $srcPathOnly = filter_path($srcPathFirstCleaning);
+            $srcPathOnly = $data;
             $srcPathInput = $srcPathOnly;
         }
 
@@ -133,7 +130,7 @@ class Main
     {
         $this->checkContentType("multipart/form-data", true);
 
-        $this->checkUserAccess("create-file");
+        $this->checkUserAccess("create_file");
 
         if (empty($_FILES) || empty($_POST)) {
             $this->finalResponse(422, "Missing Informations");
@@ -147,14 +144,18 @@ class Main
             $this->finalResponse(412, "Uploading Multiple Files is Not Allowed");
         }
 
-        $dstPathFirstCleaning = cleanInputPath($_POST['path']);
+        $srcPathInput = clean_input($_POST['path']);
 
-        if ($dstPathFirstCleaning === "") {
-            $this->finalResponse(422, "Empty Path Not Allowed");
+        if (!validate_required($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide the Folder path!");
         }
 
-        if (hasPathEndsWithFile($dstPathFirstCleaning)) {
-            $this->finalResponse(400, $dstPathFirstCleaning . " is not a Path!");
+        if (!validate_alpha_dash_slash($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide a valide source Path of a folder!");
+        }
+
+        if (hasPathEndsWithFile($srcPathInput)) {
+            $this->finalResponse(400, $srcPathInput . " is not a Path!");
         }
 
         $srcFileInput = $_FILES['file'];
@@ -167,13 +168,13 @@ class Main
         $srcFileNameInput = filter_filename($srcFileInput['name']);
         $srcFileTypeInput = $srcFileInput['type'];
 
-        $allowed_types = array("image/jpeg", "image/gif", "image/png", "image/svg", "application/pdf");
+        //$allowed_types = array("image/jpeg", "image/gif", "image/png", "image/svg", "application/pdf");
 
-        if (!in_array($srcFileTypeInput, $allowed_types)) {
+        if (!in_array($srcFileTypeInput, $this::$allowed_types)) {
             $this->finalResponse(400, "Filetype Not Allowed");
         }
 
-        $destPathOnly = filter_path($dstPathFirstCleaning);
+        $destPathOnly = $srcPathInput;
         $tempFilePath = $this::$tempFolder . DIRECTORY_SEPARATOR . $srcFileNameInput;
         $destPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $destPathOnly;
         $destFullPath = $destPath . DIRECTORY_SEPARATOR . $srcFileNameInput;
@@ -217,7 +218,7 @@ class Main
 
         deleteDirectory($this::$tempFolder, true);
 
-        $this->finalResponse(201, "File " . $srcFileNameInput . " uploaded successfully to " . $destPathOnly);
+        $this->finalResponse(200, "File " . $srcFileNameInput . " uploaded successfully to " . $destPathOnly);
 
     }
 
@@ -233,21 +234,34 @@ class Main
     public function addFolder()
     {
         $this->checkContentType();
-        $this->checkUserAccess("create-file");
+
+        $this->checkUserAccess("create_file");
 
         $input = file_get_contents('php://input');
         $object = json_decode($input, true);
 
-        $desiredKeys = array("path");
-        $this->checkPathResponseData($object, $desiredKeys);
-
-        $srcPathFirstCleaning = cleanInputPath($object['path']);
-
-        if (hasPathEndsWithFile($srcPathFirstCleaning)) {
-            $this->finalResponse(400, $srcPathFirstCleaning . " is not a Folder path!");
+        if (!isset($object)) {
+            $this->finalResponse(415, "no data");
         }
 
-        $srcPathInput = filter_path($srcPathFirstCleaning);
+        $desiredKeys = array("path");
+
+        $this->checkPathResponseData($object, $desiredKeys);
+
+        $srcPathInput = clean_input($object['path']);
+
+        if (!validate_required($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide a Folder path !");
+        }
+
+        if (!validate_alpha_dash_slash($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide a valide Path of a folder!");
+        }
+
+        if (hasPathEndsWithFile($srcPathInput)) {
+            $this->finalResponse(400, $srcPathInput . " is not a Folder path!");
+        }
+
         $srcFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $srcPathInput;
 
         $srcInfo = explode("/", $srcPathInput);
@@ -268,7 +282,7 @@ class Main
             $this->finalResponse(400, "Error creating directory");
         }
 
-        $this->finalResponse(201, "Path " . $srcPathInput . " was successfully created!");
+        $this->finalResponse(200, "Path " . $srcPathInput . " was successfully created!");
 
     }
 
@@ -284,25 +298,36 @@ class Main
     public function rename()
     {
         $this->checkContentType();
-        $this->checkUserAccess("update-file");
+        $this->checkUserAccess("update_file");
 
         $input = file_get_contents('php://input');
         $object = json_decode($input, true);
+
+        if (!isset($object)) {
+            $this->finalResponse(415, "no data");
+        }
+
         $desiredKeys = array("old_file_path", "new_file_path");
 
         $this->checkPathResponseData($object, $desiredKeys);
 
-        $srcPathFirstCleaning = cleanInputPath($object['old_file_path']);
+        $srcPathInput = clean_input($object['old_file_path']);
 
-        if (hasPathEndsWithFile($srcPathFirstCleaning)) {
-            $srcPathLessFile = removeFilenameFromPath($srcPathFirstCleaning);
-            $srcPathOnly = filter_path($srcPathLessFile);
-            //$srcFilename = substr(strrchr($srcPathFirstCleaning, "/"), 1);
-            $srcFilename = basename($srcPathFirstCleaning);
-            $srcFilename = filter_filename($srcFilename);
+        if (!validate_required($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide the source File or Folder path!");
+        }
+
+        if (!validate_alpha_dash_slash($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide valide source Path of a folder or a file!");
+        }
+
+        if (hasPathEndsWithFile($srcPathInput)) {
+            $srcPathLessFile = removeFilenameFromPath($srcPathInput);
+            $srcPathOnly = $srcPathLessFile;
+            $srcFilename = basename($srcPathInput);
             $srcPathInput = $srcPathOnly . DIRECTORY_SEPARATOR . $srcFilename;
         } else {
-            $srcPathOnly = filter_path($srcPathFirstCleaning);
+            $srcPathOnly = $srcPathInput;
             $srcPathInput = $srcPathOnly;
         }
 
@@ -312,17 +337,23 @@ class Main
             $this->finalResponse(400, "File/Folder " . $srcPathInput . " does Not Exist");
         }
 
-        $dstPathFirstCleaning = cleanInputPath($object['new_file_path']);
+        $destPathInput = clean_input($object['new_file_path']);
 
-        if (hasPathEndsWithFile($dstPathFirstCleaning)) {
-            $destPathLessFile = removeFilenameFromPath($dstPathFirstCleaning);
-            $destPathOnly = filter_path($destPathLessFile);
-            //$srcFilename = substr(strrchr($dstPathFirstCleaning, "/"), 1);
-            $destFilename = basename($dstPathFirstCleaning);
-            $destFilename = filter_filename($srcFilename);
+        if (!validate_required($destPathInput)) {
+            $this->finalResponse(415, "You need to provide the target File or Folder path!");
+        }
+
+        if (!validate_alpha_dash_slash($destPathInput)) {
+            $this->finalResponse(415, "You need to provide valide target Path of a folder or a file!");
+        }
+
+        if (hasPathEndsWithFile($destPathInput)) {
+            $destPathLessFile = removeFilenameFromPath($destPathInput);
+            $destPathOnly = $destPathLessFile;
+            $destFilename = basename($destPathInput);
             $destPathInput = $destPathOnly . DIRECTORY_SEPARATOR . $destFilename;
         } else {
-            $destPathOnly = filter_path($dstPathFirstCleaning);
+            $destPathOnly = $destPathInput;
             $destPathInput = $destPathOnly;
         }
 
@@ -354,45 +385,60 @@ class Main
     public function copy()
     {
         $this->checkContentType();
-        $this->checkUserAccess("update-file");
+        $this->checkUserAccess("update_file");
 
         $input = file_get_contents('php://input');
         $object = json_decode($input, true);
+
+        if (!isset($object)) {
+            $this->finalResponse(415, "no data");
+        }
 
         $desiredKeys = array("source", "dest");
 
         $this->checkPathResponseData($object, $desiredKeys);
 
-        $srcPathFirstCleaning = cleanInputPath($object['source']);
+        $srcPathInput = clean_input($object['source']);
 
-        if (!hasPathEndsWithFile($srcPathFirstCleaning)) {
-            $this->finalResponse(400, $srcPathFirstCleaning . " does not contain a filename!");
+        if (!validate_required($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide the source File or Folder path!");
         }
 
-        $dstPathFirstCleaning = cleanInputPath($object['dest']);
-
-        if ($dstPathFirstCleaning === "") {
-            $this->finalResponse(400, " Empty Path Not Allowed!");
+        if (!validate_alpha_dash_slash($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide valide source Path of a folder or a file!");
         }
 
-        if (hasPathEndsWithFile($dstPathFirstCleaning)) {
-            $this->finalResponse(400, $dstPathFirstCleaning . " is not a Path!");
+        if (!hasPathEndsWithFile($srcPathInput)) {
+            $this->finalResponse(400, $srcPathInput . " does not contain a filename!");
         }
 
-        $srcPathLessFile = removeFilenameFromPath($srcPathFirstCleaning);
-        //$srcPathLessFile = pathinfo($srcPathFirstCleaning, PATHINFO_DIRNAME);
-        $srcPathOnly = filter_path($srcPathLessFile);
-        //$srcFilename = substr(strrchr($srcPathFirstCleaning, "/"), 1);
-        $srcFilename = basename($srcPathFirstCleaning);
-        $srcFilename = filter_filename($srcFilename);
-        $srcPathInput = $srcPathOnly . DIRECTORY_SEPARATOR . $srcFilename;
-        $srcFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $srcPathInput;
+        $destPathInput = clean_input($object['dest']);
+
+        if (!validate_required($destPathInput)) {
+            $this->finalResponse(415, "You need to provide the target File or Folder path!");
+        }
+
+        if (!validate_alpha_dash_slash($destPathInput)) {
+            $this->finalResponse(415, "You need to provide valide target Path of a folder or a file!");
+        }
+
+        if (hasPathEndsWithFile($destPathInput)) {
+            $this->finalResponse(400, $destPathInput . " is not a Path of a folder!");
+        }
+
+
+        //$srcPathLessFile = pathinfo($srcPathInput, PATHINFO_DIRNAME);
+        $srcPathOnly = removeFilenameFromPath($srcPathInput);
+        //$srcFilename = substr(strrchr($srcPathInput, "/"), 1);
+        $srcFilename = basename($srcPathInput);
+        $srcPathInputResult = $srcPathOnly . DIRECTORY_SEPARATOR . $srcFilename;
+        $srcFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $srcPathInputResult;
 
         if (!$this->filesystem->exists($srcFullPath)) {
-            $this->finalResponse(400, "File " . $srcPathInput . " does Not Exist");
+            $this->finalResponse(400, "File " . $srcPathInputResult . " does Not Exist");
         }
 
-        $destPathInput = filter_path($dstPathFirstCleaning);
+        $destPathInput = $srcPathInputResult;
         $destFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $destPathInput;
 
         if (!$this->filesystem->exists($destFullPath)) {
@@ -430,43 +476,62 @@ class Main
     public function copyFolder()
     {
         $this->checkContentType();
-        $this->checkUserAccess("update-file");
+        $this->checkUserAccess("update_file");
 
         $input = file_get_contents('php://input');
         $object = json_decode($input, true);
+
+        if (!isset($object)) {
+            $this->finalResponse(415, "no data");
+        }
 
         $desiredKeys = array("source", "dest");
 
         $this->checkPathResponseData($object, $desiredKeys);
 
-        $srcPathFirstCleaning = cleanInputPath($object['source']);
 
-        if (hasPathEndsWithFile($srcPathFirstCleaning)) {
-            $this->finalResponse(400, $srcPathFirstCleaning . " is not a Path!");
+        $srcPathInput = clean_input($object['source']);
+
+        if (!validate_required($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide the source File or Folder path!");
         }
 
-        $dstPathFirstCleaning = cleanInputPath($object['dest']);
-
-        if (hasPathEndsWithFile($dstPathFirstCleaning)) {
-            $this->finalResponse(400, $dstPathFirstCleaning . " is not a Path!");
+        if (!validate_alpha_dash_slash($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide valide source Path of a folder or a file!");
         }
 
-        $srcPathInput = filter_path($srcPathFirstCleaning);
+        if (hasPathEndsWithFile($srcPathInput)) {
+            $this->finalResponse(400, $srcPathInput . " is not a Path!");
+        }
+
+
+        $destPathInput = clean_input($object['dest']);
+
+        if (!validate_required($destPathInput)) {
+            $this->finalResponse(415, "You need to provide the target File or Folder path!");
+        }
+
+        if (!validate_alpha_dash_slash($destPathInput)) {
+            $this->finalResponse(415, "You need to provide valide target Path of a folder or a file!");
+        }
+
+        if (hasPathEndsWithFile($destPathInput)) {
+            $this->finalResponse(400, $destPathInput . " is not a Path!");
+        }
+
+
         $srcFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $srcPathInput;
 
         if (!$this->filesystem->exists($srcFullPath)) {
             $this->finalResponse(400, "Path " . $srcPathInput . " does Not Exist");
         }
 
-        $destPathInput = filter_path($dstPathFirstCleaning);
+
         $destFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $destPathInput;
 
         if (!$this->filesystem->exists($destFullPath)) {
             $this->finalResponse(400, "Path " . $destPathInput . " does Not Exist");
         }
-
-        //We could add a routine here to check if any file ond src folder not
-        //present on the destination folder. https://github.com/sureshdotariya/folder-compare
 
         try {
             $this->filesystem->mirror($srcFullPath, $destFullPath);
@@ -491,38 +556,51 @@ class Main
     public function delete()
     {
         $this->checkContentType();
-        $this->checkUserAccess("delete-file");
+        $this->checkUserAccess("delete_file");
 
         $input = file_get_contents('php://input');
         $object = json_decode($input, true);
+
+        if (!isset($object)) {
+            $this->finalResponse(415, "no data");
+        }
+
         $desiredKeys = array("path");
 
         $this->checkPathResponseData($object, $desiredKeys);
 
-        $srcPathFirstCleaning = cleanInputPath($object['path']);
 
-        if (hasPathEndsWithFile($srcPathFirstCleaning)) {
-            $srcPathLessFile = removeFilenameFromPath($srcPathFirstCleaning);
-            $srcPathOnly = filter_path($srcPathLessFile);
-            //$srcFilename = substr(strrchr($srcPathFirstCleaning, "/"), 1);
-            $srcFilename = basename($srcPathFirstCleaning);
-            $srcFilename = filter_filename($srcFilename);
-            $srcPathInput = $srcPathOnly . DIRECTORY_SEPARATOR . $srcFilename;
-        } else {
-            $srcPathOnly = filter_path($srcPathFirstCleaning);
-            $srcPathInput = $srcPathOnly;
+        $srcPathInput = clean_input($object['path']);
+
+        if (!validate_required($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide the Folder path!");
         }
 
-        $srcFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $srcPathInput;
+        if (!validate_alpha_dash_slash($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide a valide source Path of a folder or a file!");
+        }
+
+        if (hasPathEndsWithFile($srcPathInput)) {
+            $srcPathLessFile = removeFilenameFromPath($srcPathInput);
+            $srcPathOnly = $srcPathLessFile;
+            //$srcFilename = substr(strrchr($srcPathInput, "/"), 1);
+            $srcFilename = basename($srcPathInput);
+            $srcPathInputResult = $srcPathOnly . DIRECTORY_SEPARATOR . $srcFilename;
+        } else {
+            $srcPathOnly = $srcPathInput;
+            $srcPathInputResult = $srcPathOnly;
+        }
+
+        $srcFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $srcPathInputResult;
 
         if (!$this->filesystem->exists($srcFullPath)) {
-            $this->finalResponse(400, "File/Folder " . $srcPathInput . " does Not Exist");
+            $this->finalResponse(400, "File/Folder " . $srcPathInputResult . " does Not Exist");
         }
 
         if (is_dir($srcFullPath)) {
             $isDirEmpty = !(new \FilesystemIterator($srcFullPath))->valid();
             if (!$isDirEmpty) {
-                $this->finalResponse(400, "Path " . $srcPathInput . " Is Not Empty");
+                $this->finalResponse(400, "Path " . $srcPathInputResult . " Is Not Empty");
             }
             try {
                 $this->filesystem->remove($srcFullPath);
@@ -555,32 +633,46 @@ class Main
     public function forceDelete()
     {
         $this->checkContentType();
-        $this->checkUserAccess("delete-file");
+        $this->checkUserAccess("delete_file");
 
         $input = file_get_contents('php://input');
         $object = json_decode($input, true);
+
+        if (!isset($object)) {
+            $this->finalResponse(415, "no data");
+        }
+
         $desiredKeys = array("path");
 
         $this->checkPathResponseData($object, $desiredKeys);
 
-        $srcPathFirstCleaning = cleanInputPath($object['path']);
+        $srcPathFirstCleaning = clean_input($object['path']);
 
-        if (hasPathEndsWithFile($srcPathFirstCleaning)) {
-            $srcPathLessFile = removeFilenameFromPath($srcPathFirstCleaning);
-            $srcPathOnly = filter_path($srcPathLessFile);
-            //$srcFilename = substr(strrchr($srcPathFirstCleaning, "/"), 1);
-            $srcFilename = basename($srcPathFirstCleaning);
-            $srcFilename = filter_filename($srcFilename);
-            $srcPathInput = $srcPathOnly . DIRECTORY_SEPARATOR . $srcFilename;
-        } else {
-            $srcPathOnly = filter_path($srcPathFirstCleaning);
-            $srcPathInput = $srcPathOnly;
+        $srcPathInput = clean_input($object['path']);
+
+        if (!validate_required($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide the Folder path!");
         }
 
-        $srcFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $srcPathInput;
+        if (!validate_alpha_dash_slash($srcPathInput)) {
+            $this->finalResponse(415, "You need to provide a valide source Path of a folder or a file!");
+        }
+
+        if (hasPathEndsWithFile($srcPathInput)) {
+            $srcPathLessFile = removeFilenameFromPath($srcPathInput);
+            $srcPathOnly = $srcPathLessFile;
+            //$srcFilename = substr(strrchr($srcPathInput, "/"), 1);
+            $srcFilename = basename($srcPathInput);
+            $srcPathInputResult = $srcPathOnly . DIRECTORY_SEPARATOR . $srcFilename;
+        } else {
+            $srcPathOnly = $srcPathInput;
+            $srcPathInputResult = $srcPathOnly;
+        }
+
+        $srcFullPath = $this::$uploadFolder . DIRECTORY_SEPARATOR . $srcPathInputResult;
 
         if (!$this->filesystem->exists($srcFullPath)) {
-            $this->finalResponse(400, "File/Folder " . $srcPathInput . " does Not Exist");
+            $this->finalResponse(400, "File/Folder " . $srcPathInputResult . " does Not Exist");
         }
 
         if (is_dir($srcFullPath)) {
@@ -615,32 +707,40 @@ class Main
     public function addUser()
     {
         $this->checkContentType();
-        $this->checkUserAccess("create-user");
+        $this->checkUserAccess("create_user");
 
         $input = file_get_contents('php://input');
         $object = json_decode($input, true);
         $desiredKeys = array("username", "permissions_string");
 
+        if (!isset($object)) {
+            $this->finalResponse(415, "no data");
+        }
+
         $this->checkUserResponseData($object, $desiredKeys);
 
-        $UserInput = cleanInputPath($object['username']);
-        $UserInput = convertToLowerCase($UserInput);
-        $PermInput = cleanInputPath($object['permissions_string']);
+        $userInput = clean_input($object['username']);
+        $userInput = convertToLowerCase($userInput);
 
-        if ($this->user->isRegistredUser($UserInput)) {
+        if ($this->user->isRegistredUser($userInput)) {
             $this->finalResponse(400, "Username Not Available");
         }
-        $this->checkPermInput($object);
 
-        $json_a = jsonToArray($this::$aclJSON);
+        $permInput = clean_input($object['permissions_string']);
 
-        $output = array_merge($json_a, array($UserInput => $PermInput));
-        file_put_contents($this::$aclJSON, json_encode($output, JSON_PRETTY_PRINT));
+        if (!$this->checkPermInput($permInput)) {
+            $this->finalResponse(400, "Permissions Not Accurate");
+        }
 
-        $token_generated = $this->auth->generateToken($UserInput);
+        $appendUserResponse = $this->user->appendUserToJSON($userInput, $permInput);
 
-        $this->finalResponse(201, "User " . $UserInput . " with permissions " . $PermInput . " was added successfully", $token_generated);
+        if ($appendUserResponse) {
+            $token_generated = $this->auth->generateToken($userInput);
 
+            return $this->finalResponse(200, $appendUserResponse[0], $token_generated, [], $appendUserResponse[1]);
+
+        }
+        $this->finalResponse(500, $appendUserResponse[0]);
     }
 
     /**
@@ -655,39 +755,22 @@ class Main
      */
     public function userInfo(string $data)
     {
-        $this->checkUserAccess("read-user");
+        $this->checkUserAccess("read_user");
 
         if (!isset($data)) {
             $this->finalResponse(415, "no data");
         }
 
         $data = trim($data, "/");
-        $UserInput = cleanInputPath($data);
+        $userInput = clean_input($data);
 
-        if (!$this->user->isRegistredUser($UserInput)) {
+        if (!$this->user->isRegistredUser($userInput)) {
             $this->finalResponse(400, "Username Not Available");
         }
 
-        $json_a = jsonToArray($this::$aclJSON);
+        $userInfo = $this->user->getUserFromJSON($userInput);
 
-        $perm_array = array();
-
-        foreach ($json_a as $id => $value) {
-            if ($id == convertToLowerCase($UserInput)) {
-                $codes_arr = explode('-', $value);
-                foreach ($codes_arr as $key => $val) {
-                    foreach ($this->user::$permissions as $code => $permision_string) {
-                        if ($val == $code) {
-                            $perm_array[] = $permision_string;
-                        }
-                    }
-                }
-                $str = implode(", ", $perm_array);
-                $UserInputPermlist = rtrim($str, ', ');
-                $UserInputPermCout = count($perm_array);
-                $this->finalResponse(200, "User " . $UserInput . " has the following " . $UserInputPermCout . " permissions : " . $UserInputPermlist);
-            }
-        }
+        $this->finalResponse(200, $userInfo[0], null, [], [], $userInfo[1]);
 
     }
 
@@ -702,15 +785,15 @@ class Main
      */
     public function listUsers()
     {
-        $this->checkUserAccess("read-user");
+        $this->checkUserAccess("read_user");
 
-        $json_a = jsonToArray($this::$aclJSON);
-        $str = '';
-        foreach ($json_a as $key => $val) {
-            $str .= $key . ", ";
+        $users_arr = $this->user->listUsersFromJSON();
+
+        if (isset($users_arr[1])) {
+            $this->finalResponse(200, "There are " . $users_arr[0] . " users.", null, [], [], $users_arr[1]);
         }
 
-        $this->finalResponse(200, "There are " . count($json_a) . " Users : " . rtrim($str, ', '));
+        $this->finalResponse(200, "There are " . $users_arr[0] . " users.");
 
     }
 
@@ -726,40 +809,38 @@ class Main
     public function updateUser()
     {
         $this->checkContentType();
-        $this->checkUserAccess("update-users-permissions");
+        $this->checkUserAccess("update_users_permissions");
 
         $input = file_get_contents('php://input');
         $object = json_decode($input, true);
         $desiredKeys = array("username", "permissions_string");
 
+        if (!isset($object)) {
+            $this->finalResponse(415, "no data");
+        }
+
         $this->checkUserResponseData($object, $desiredKeys);
 
-        $UserInput = cleanInputPath($object['username']);
-        $UserInput = convertToLowerCase($UserInput);
-        $PermInput = cleanInputPath($object['permissions_string']);
+        $userInput = clean_input($object['username']);
+        $userInput = convertToLowerCase($userInput);
 
-        if (!$this->user->isRegistredUser($UserInput)) {
+        if (!$this->user->isRegistredUser($userInput)) {
             $this->finalResponse(400, "Username Not Available");
         }
 
-        $this->checkPermInput($object);
+        $permInput = clean_input($object['permissions_string']);
 
-        $json_a = jsonToArray($this::$aclJSON);
-
-        foreach ($json_a as $key => &$val) {
-            if ($key == convertToLowerCase($UserInput)) {
-                if ($val == $PermInput) {
-                    $this->finalResponse(200, "Nothing to Update");
-                } else {
-                    $val = $PermInput;
-                }
-            }
+        if (!$this->checkPermInput($permInput)) {
+            $this->finalResponse(400, "Permissions Not Accurate");
         }
 
-        file_put_contents($this::$aclJSON, json_encode($json_a, JSON_PRETTY_PRINT));
+        $updateUserResponse = $this->user->updateUserInJSON($userInput, $permInput);
 
-        $this->finalResponse(200, "User " . $UserInput . " was succefully updated with the following permissions " . $PermInput);
+        if ($updateUserResponse) {
+            return $this->finalResponse(200, $updateUserResponse[0], null, [], $updateUserResponse[1]);
+        }
 
+        $this->finalResponse(500, $updateUserResponse[0]);
     }
 
     /**
@@ -774,29 +855,31 @@ class Main
     public function deleteUser()
     {
         $this->checkContentType();
-        $this->checkUserAccess("delete-user");
+        $this->checkUserAccess("delete_user");
 
         $input = file_get_contents('php://input');
-        //parse_str(file_get_contents("php://input"), $input);
         $object = json_decode($input, true);
         $desiredKeys = array("username");
 
+        if (!isset($object)) {
+            $this->finalResponse(415, "no data");
+        }
+
         $this->checkUserResponseData($object, $desiredKeys);
 
-        $UserInput = cleanInputPath($object['username']);
-        $UserInput = convertToLowerCase($UserInput);
+        $userInput = clean_input($object['username']);
+        $userInput = convertToLowerCase($userInput);
 
-        if (!$this->user->isRegistredUser($UserInput)) {
+        if (!$this->user->isRegistredUser($userInput)) {
             $this->finalResponse(400, "Username Not Available");
         }
 
-        $json_a = jsonToArray($this::$aclJSON);
+        $deleteUserResponse = $this->user->deleteUserFromJSON($userInput);
 
-        unset($json_a[$UserInput]);
-
-        file_put_contents($this::$aclJSON, json_encode($json_a, JSON_PRETTY_PRINT));
-
-        $this->finalResponse(200, "User " . $UserInput . " was succefully deleted!");
+        if ($deleteUserResponse) {
+            $this->finalResponse(200, $deleteUserResponse);
+        }
+        $this->finalResponse(500, $deleteUserResponse);
 
     }
 
@@ -813,10 +896,6 @@ class Main
      */
     private function checkUserResponseData(array $object, array $desiredKeys): void
     {
-
-        if (!isset($object)) {
-            $this->finalResponse(415, "no data");
-        }
 
         if (!isArrayOfKeysExists($desiredKeys, $object)) {
             $this->finalResponse(400, "Missing Property");
@@ -839,9 +918,6 @@ class Main
      */
     private function checkPathResponseData(array $object, array $desiredKeys): void
     {
-        if (!isset($object)) {
-            $this->finalResponse(415, "no data");
-        }
 
         if (!isArrayOfKeysExists($desiredKeys, $object)) {
             $this->finalResponse(400, "Missing Property");
@@ -899,7 +975,7 @@ class Main
     private function checkUserAccess(string $perm)
     {
         if (!$this->user->hasThePerm($this->username, $perm)) {
-            $this->finalResponse(401, "no authorization");
+            $this->finalResponse(401, "Not Authorizated");
         }
 
     }
@@ -909,23 +985,36 @@ class Main
      *
      * @author    Mohamed LAMGOUNI <focus3d.ro@gmail.com>
      * @since    v0.0.1
-     * @version    v1.0.0    Friday, March 29th, 2019.
+     * @version    v1.0.0    Wednesday, April 3rd, 2019.
      * @access    private
      * @param    int       $status
      * @param    string    $content
      * @param    string    $apiKey          Default: null
      * @param    array     $filePathInfo    Default: []
+     * @param    array     $userPermInfo    Default: []
+     * @param    array     $userListInfo    Default: []
      * @return    void
      */
-    private function finalResponse(int $status, string $content, string $apiKey = null, array $filePathInfo = [])
+    private function finalResponse(int $status, string $content, string $apiKey = null, array $filePathInfo = [], array $userPermInfo = [], array $userListInfo = [])
     {
         $this->response->setStatus($status);
+
         if ($apiKey) {
             $this->response->setUserCred($apiKey);
         }
+
         if ($filePathInfo) {
-            $this->response->setfilePathInfo($filePathInfo);
+            $this->response->setFilePathInfo($filePathInfo);
         }
+
+        if ($userPermInfo) {
+            $this->response->setUserPermInfo($userPermInfo);
+        }
+
+        if ($userListInfo) {
+            $this->response->setUserListInfo($userListInfo);
+        }
+
         $this->response->setContent($content);
         $this->response->finish();
     }
@@ -937,28 +1026,29 @@ class Main
      * @since    v0.0.1
      * @version    v1.0.0    Friday, March 29th, 2019.
      * @access    private
-     * @param    array    $object
+     * @param    string    $permInput
      * @return    void
      */
-    private function checkPermInput(array $object)
+    private function checkPermInput(string $permInput)
     {
-        $perms_input = explode('-', $object['permissions_string']);
+        $perms_input = explode('-', $permInput);
 
         if (count($perms_input) != 8) {
-            $this->finalResponse(400, "Permissions too long or too short");
+            return false;
         }
+
         $target_arr = explode('-', 'cf-rf-uf-df-cu-ru-uu-du');
-        //$target_arr2 = explode('-', 'xx-xx-xx-xx-xx-xx-xx-xx');
-        //$this->response->setContent(count(array_intersect($target_arr1, $perms_input)). " - ". count(array_intersect($target_arr2, $perms_input)) .' --- '.count(array_diff($target_arr1, $perms_input)). " - ". count(array_diff($target_arr2, $perms_input)));
+
         foreach ($perms_input as $key => $val) {
             foreach ($target_arr as $prop => $data) {
                 if ($key == $prop) {
                     if ($val != $data && $val != 'xx') {
-                        $this->finalResponse(400, "Permissions Not Accurate");
+                        return false;
                     }
                 }
             }
         }
+        return true;
     }
 
 }

@@ -1,8 +1,8 @@
 <?php
 //declare (strict_types = 1);
-namespace App;
+namespace App\Auth;
 
-use App\User;
+use App\Model\User;
 use Firebase\JWT\JWT;
 
 /**

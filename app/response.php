@@ -21,6 +21,8 @@ class Response
     private $status;
     private $userCred;
     private $filePathInfo;
+    private $userPermInfo;
+    private $userListInfo;
     private $content;
 
     /**
@@ -30,7 +32,9 @@ class Response
     {
         $this->setStatus(200);
         $this->setUserCred('');
-        $this->setfilePathInfo([]);
+        $this->setFilePathInfo([]);
+        $this->setUserPermInfo([]);
+        $this->setUserListInfo([]);
         $this->setContent('');
     }
 
@@ -41,27 +45,45 @@ class Response
     public function finish()
     {
         // build JSON string to return
-        if ($this->userCred != '') {
+
+        if ($this->userCred != '' && $this->userPermInfo != []) {
             $json = json_encode(
                 array(
-                    'status' => $this->status,
-                    'token' => $this->userCred,
-                    'content' => $this->content,
+                    'Status' => $this->status,
+                    'Token' => $this->userCred,
+                    'Content' => $this->content,
+                    'Permission(s)' => $this->userPermInfo,
                 )
             );
         } elseif ($this->filePathInfo != []) {
             $json = json_encode(
                 array(
-                    'status' => $this->status,
-                    'content' => $this->content,
-                    'info' => $this->filePathInfo,
+                    'Status' => $this->status,
+                    'Content' => $this->content,
+                    'File/Path Info' => $this->filePathInfo,
+                )
+            );
+        } elseif ($this->userPermInfo != []) {
+            $json = json_encode(
+                array(
+                    'Status' => $this->status,
+                    'Content' => $this->content,
+                    'Permission(s)' => $this->userPermInfo,
+                )
+            );
+        } elseif ($this->userListInfo != []) {
+            $json = json_encode(
+                array(
+                    'Status' => $this->status,
+                    'Content' => $this->content,
+                    'User(s)' => $this->userListInfo,
                 )
             );
         } else {
             $json = json_encode(
                 array(
-                    'status' => $this->status,
-                    'content' => $this->content,
+                    'Status' => $this->status,
+                    'Content' => $this->content,
                 )
             );
 
@@ -132,10 +154,10 @@ class Response
         );
         $statusCode = (int) (in_array($statusCode, array_keys($codes)) ? $statusCode : 500);
         $this->status = array(
-            'code' => $statusCode,
-            'info' => $codes[$statusCode],
+            'Code' => $statusCode,
+            'Info' => $codes[$statusCode],
         );
-        header('HTTP/1.1 ' . $this->status['code'] . ' ' . $this->status['info']);
+        header('HTTP/1.1 ' . $this->status['Code'] . ' ' . $this->status['Info']);
     }
 
     /**
@@ -149,14 +171,29 @@ class Response
     /**
      * @var        function    setUserCred($userCred)
      */
-    final public function setfilePathInfo($filePathInfo)
+    final public function setFilePathInfo($filePathInfo)
     {
         $this->filePathInfo = $filePathInfo;
     }
 
     /**
-     * Sets the data to output
-     * @var array
+     * @var        function    setUserPermInfo($userPermInfo)
+     */
+    final public function setUserPermInfo($userPermInfo)
+    {
+        $this->userPermInfo = $userPermInfo;
+    }
+
+    /**
+     * @var        function    setUserListInfo($userListInfo)
+     */
+    final public function setUserListInfo($userListInfo)
+    {
+        $this->userListInfo = $userListInfo;
+    }
+
+    /**
+     * @var        function    setContent($content)
      */
     final public function setContent($content)
     {

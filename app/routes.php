@@ -2,7 +2,7 @@
 declare (strict_types = 1);
 date_default_timezone_set('Europe/Bucharest');
 
-use App\Auth;
+use App\Auth\Auth;
 use App\Response;
 use Bramus\Router\Router;
 use Dotenv\Dotenv;

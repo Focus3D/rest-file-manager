@@ -80,27 +80,6 @@ if (!function_exists('getAllHeaders')) {
     }
 }
 
-if (!function_exists('jsonToArray')) {
-
-    /**
-     * jsonToArray.
-     *
-     * @author    Mohamed LAMGOUNI <focus3d.ro@gmail.com>
-     * @since    v0.0.1
-     * @version    v1.0.0    Friday, March 29th, 2019.
-     * @param    string    $file
-     * @return    mixed
-     */
-    function jsonToArray(string $file): array
-    {
-
-        $jsonFile = file_get_contents($file);
-        $json_a = json_decode($jsonFile, true);
-        return $json_a;
-    }
-
-}
-
 if (!function_exists('in_array_r')) {
     /**
      * in_array_r.
@@ -552,4 +531,34 @@ if (!function_exists('FileSizeConvert')) {
         return $result;
     }
 
+}
+
+if (!function_exists('validate_required')) {
+    function validate_required($input)
+    {
+        if (isset($input) && ($input === false || $input === 0 || $input === 0.0 || $input === '0' || !empty($input))) {
+            return true;
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('validate_alpha_dash_slash')) {
+    function validate_alpha_dash_slash($input)
+    {
+        if (!preg_match('/^([a-z0-9ÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÒÓÔÕÖßÙÚÛÜÝàáâãäåçèéêëìíîïðòóôõöùúûüýÿ_\/.-])+$/i', $input) === false) {
+            return true;
+        }
+        return false;
+    }
+}
+if (!function_exists('clean_input')) {
+    function clean_input($input)
+    {
+        $input = trim($input);
+        $input = stripslashes($input);
+        $input = htmlspecialchars($input);
+        return $input;
+    }
 }
